@@ -155,3 +155,68 @@ stages:
             inputs:
               targetPath: $(Build.ArtifactStagingDirectory)/app
               artifact: $(artifactName)
+
+  # ---- email: exactly one of these two runs (devops-tasks only) ----
+
+  - stage: EmailSuccess
+    # all 4 stages passed
+    dependsOn: [Build, SonarQube, NuGet, Tag]
+    condition: and(succeeded(), eq(variables['Build.SourceBranch'], variables['tasksBranch']))
+    variables:
+      # Library -> variable group "email": SMTP_USER, MAIL_TO, SMTP_PASS (secret)
+      - group: email
+    jobs:
+      - job: Mail
+        steps:
+          - checkout: none
+
+          # write the mail (headers, empty line, body) -> send it through Gmail SMTP with curl
+          - script: |
+              cat > mail.txt <<EOF
+              From: HelloWorld Pipeline <$SMTP_USER>
+              To: $MAIL_TO
+              Subject: SUCCESS: HelloWorld $(Build.BuildNumber) on $(Build.SourceBranchName)
+
+              Pipeline run $(Build.BuildNumber) succeeded.
+              Branch: $(Build.SourceBranchName)
+              Commit: $(Build.SourceVersion)
+              Run: $(System.CollectionUri)$(System.TeamProject)/_build/results?buildId=$(Build.BuildId)
+              EOF
+              curl --ssl-reqd --url smtps://smtp.gmail.com:465 \
+                --user "$SMTP_USER:$SMTP_PASS" \
+                --mail-from "$SMTP_USER" --mail-rcpt "$MAIL_TO" \
+                --upload-file mail.txt
+            displayName: Send success email
+            # secrets are not passed to scripts automatically -> hand it over (masked *** in the log)
+            env:
+              SMTP_PASS: $(SMTP_PASS)
+
+  - stage: EmailFailure
+    # at least one of the 4 stages failed
+    dependsOn: [Build, SonarQube, NuGet, Tag]
+    condition: and(failed(), eq(variables['Build.SourceBranch'], variables['tasksBranch']))
+    variables:
+      - group: email
+    jobs:
+      - job: Mail
+        steps:
+          - checkout: none
+
+          - script: |
+              cat > mail.txt <<EOF
+              From: HelloWorld Pipeline <$SMTP_USER>
+              To: $MAIL_TO
+              Subject: FAILED: HelloWorld $(Build.BuildNumber) on $(Build.SourceBranchName)
+
+              Pipeline run $(Build.BuildNumber) failed.
+              Branch: $(Build.SourceBranchName)
+              Commit: $(Build.SourceVersion)
+              Run: $(System.CollectionUri)$(System.TeamProject)/_build/results?buildId=$(Build.BuildId)
+              EOF
+              curl --ssl-reqd --url smtps://smtp.gmail.com:465 \
+                --user "$SMTP_USER:$SMTP_PASS" \
+                --mail-from "$SMTP_USER" --mail-rcpt "$MAIL_TO" \
+                --upload-file mail.txt
+            displayName: Send failure email
+            env:
+              SMTP_PASS: $(SMTP_PASS)
