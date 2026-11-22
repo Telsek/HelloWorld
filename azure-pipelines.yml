@@ -12,6 +12,8 @@ variables:
   minor: 0
   # +1 on every run (Azure DevOps keeps the count)
   patch: $[counter(format('{0}.{1}', variables['major'], variables['minor']), 0)]
+  # the branch that gets the extra stages (SonarQube, NuGet, tag, email)
+  tasksBranch: refs/heads/devops-tasks
 
 stages:
   - stage: Build
@@ -46,3 +48,45 @@ stages:
               versionOption: custom
               versionPublish: $(version)
               packagePublishDescription: HelloWorld console app build
+
+  # ---- only on the devops-tasks branch ----
+
+  - stage: SonarQube
+    dependsOn: Build
+    # runs only if Build passed AND this run is on devops-tasks (skipped everywhere else)
+    condition: and(succeeded(), eq(variables['Build.SourceBranch'], variables['tasksBranch']))
+    jobs:
+      - job: Scan
+        steps:
+          - task: UseDotNet@2
+            displayName: Install .NET 10 SDK
+            inputs:
+              packageType: sdk
+              version: 10.0.x
+
+          # 1. tell the scanner where to send results (service connection + keys)
+          - task: SonarCloudPrepare@4
+            displayName: Prepare SonarQube analysis
+            inputs:
+              SonarCloud: sonarcloud
+              organization: telsek
+              scannerMode: dotnet
+              projectKey: Telsek_HelloWorld
+              projectName: HelloWorld
+              projectVersion: $(major).$(minor).$(patch)
+
+          # 2. build - the scanner watches the compile and collects the code
+          - script: dotnet build HelloWorld/HelloWorld.csproj -c Release
+            displayName: Build for analysis
+
+          # 3. analyze + upload to SonarQube Cloud
+          - task: SonarCloudAnalyze@4
+            displayName: Run SonarQube analysis
+            inputs:
+              jdkversion: JAVA_HOME_21_X64
+
+          # 4. wait for the result -> quality gate shown on the run's summary
+          - task: SonarCloudPublish@4
+            displayName: Publish quality gate result
+            inputs:
+              pollingTimeoutSec: '300'
