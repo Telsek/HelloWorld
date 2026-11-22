@@ -1,0 +1,48 @@
+# HelloWorld CI - runs on a clean Microsoft-hosted VM on every push
+trigger:
+  branches:
+    include:
+      - '*'
+
+pool:
+  vmImage: ubuntu-latest
+
+variables:
+  major: 1
+  minor: 0
+  # +1 on every run (Azure DevOps keeps the count)
+  patch: $[counter(format('{0}.{1}', variables['major'], variables['minor']), 0)]
+
+stages:
+  - stage: Build
+    jobs:
+      - job: Build
+        steps:
+          - task: UseDotNet@2
+            displayName: Install .NET 10 SDK
+            inputs:
+              packageType: sdk
+              version: 10.0.x
+
+          # version = 1.0.<patch> -> printed + becomes the run's name
+          - script: |
+              VERSION=$(major).$(minor).$(patch)
+              echo "Version: $VERSION"
+              echo "##vso[build.updatebuildnumber]$VERSION"
+              echo "##vso[task.setvariable variable=version]$VERSION"
+            displayName: Version
+
+          - script: dotnet publish HelloWorld/HelloWorld.csproj -c Release -p:Version=$(version) -o $(Build.ArtifactStagingDirectory)/app
+            displayName: Build
+
+          # build output -> Azure Artifacts feed as a Universal package
+          - task: UniversalPackages@0
+            displayName: Upload to Azure Artifacts
+            inputs:
+              command: publish
+              publishDirectory: $(Build.ArtifactStagingDirectory)/app
+              vstsFeedPublish: HelloWorld/helloworld-feed
+              vstsFeedPackagePublish: helloworld
+              versionOption: custom
+              versionPublish: $(version)
+              packagePublishDescription: HelloWorld console app build
