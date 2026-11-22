@@ -58,6 +58,10 @@ stages:
     jobs:
       - job: Scan
         steps:
+          # full git history -> Sonar can show who changed what + compare with main
+          - checkout: self
+            fetchDepth: 0
+
           - task: UseDotNet@2
             displayName: Install .NET 10 SDK
             inputs:
@@ -65,7 +69,9 @@ stages:
               version: 10.0.x
 
           # 1. tell the scanner where to send results (service connection + keys)
-          - task: SonarCloudPrepare@4
+          # third-party tasks pinned to an exact version (Sonar: supply-chain risk with @4 = any 4.x)
+          #- task: SonarCloudPrepare@4
+          - task: SonarCloudPrepare@4.4.0
             displayName: Prepare SonarQube analysis
             inputs:
               SonarCloud: sonarcloud
@@ -80,13 +86,15 @@ stages:
             displayName: Build for analysis
 
           # 3. analyze + upload to SonarQube Cloud
-          - task: SonarCloudAnalyze@4
+          #- task: SonarCloudAnalyze@4
+          - task: SonarCloudAnalyze@4.4.0
             displayName: Run SonarQube analysis
             inputs:
               jdkversion: JAVA_HOME_21_X64
 
           # 4. wait for the result -> quality gate shown on the run's summary
-          - task: SonarCloudPublish@4
+          #- task: SonarCloudPublish@4
+          - task: SonarCloudPublish@4.4.0
             displayName: Publish quality gate result
             inputs:
               pollingTimeoutSec: '300'
