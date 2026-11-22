@@ -123,3 +123,35 @@ stages:
           # push with the NuGet protocol to the feed (--api-key is a required placeholder, login comes from NuGetAuthenticate)
           - script: dotnet nuget push $(Build.ArtifactStagingDirectory)/nuget/*.nupkg --source https://pkgs.dev.azure.com/andrei-amzulescu/HelloWorld/_packaging/helloworld-feed/nuget/v3/index.json --api-key az
             displayName: Push NuGet package to Azure Artifacts
+
+  - stage: Tag
+    dependsOn: NuGet
+    condition: and(succeeded(), eq(variables['Build.SourceBranch'], variables['tasksBranch']))
+    jobs:
+      - job: Tag
+        steps:
+          # name = <branch>_<version> -> printed + added as a tag on this run
+          - script: |
+              VERSION=$(major).$(minor).$(patch)
+              NAME=$(Build.SourceBranchName)_$VERSION
+              echo "Version: $VERSION"
+              echo "Artifact name: $NAME"
+              echo "##vso[build.addbuildtag]$NAME"
+              echo "##vso[task.setvariable variable=artifactName]$NAME"
+            displayName: Name + tag
+
+          - task: UseDotNet@2
+            displayName: Install .NET 10 SDK
+            inputs:
+              packageType: sdk
+              version: 10.0.x
+
+          - script: dotnet publish HelloWorld/HelloWorld.csproj -c Release -p:Version=$(major).$(minor).$(patch) -o $(Build.ArtifactStagingDirectory)/app
+            displayName: Build
+
+          # build output attached to this run as artifact <branch>_<version>
+          - task: PublishPipelineArtifact@1
+            displayName: Publish artifact
+            inputs:
+              targetPath: $(Build.ArtifactStagingDirectory)/app
+              artifact: $(artifactName)
