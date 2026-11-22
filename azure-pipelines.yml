@@ -98,3 +98,28 @@ stages:
             displayName: Publish quality gate result
             inputs:
               pollingTimeoutSec: '300'
+
+  - stage: NuGet
+    # after the scan: code that fails the scan stage never gets packaged
+    dependsOn: SonarQube
+    condition: and(succeeded(), eq(variables['Build.SourceBranch'], variables['tasksBranch']))
+    jobs:
+      - job: Pack
+        steps:
+          - task: UseDotNet@2
+            displayName: Install .NET 10 SDK
+            inputs:
+              packageType: sdk
+              version: 10.0.x
+
+          # DLL -> HelloWorld.1.0.<patch>.nupkg
+          - script: dotnet pack HelloWorld/HelloWorld.csproj -c Release -p:PackageVersion=$(major).$(minor).$(patch) -o $(Build.ArtifactStagingDirectory)/nuget
+            displayName: Pack NuGet package
+
+          # temporary feed login for dotnet (pipeline identity = HelloWorld Build Service, Feed Publisher)
+          - task: NuGetAuthenticate@1
+            displayName: Authenticate to Azure Artifacts
+
+          # push with the NuGet protocol to the feed (--api-key is a required placeholder, login comes from NuGetAuthenticate)
+          - script: dotnet nuget push $(Build.ArtifactStagingDirectory)/nuget/*.nupkg --source https://pkgs.dev.azure.com/andrei-amzulescu/HelloWorld/_packaging/helloworld-feed/nuget/v3/index.json --api-key az
+            displayName: Push NuGet package to Azure Artifacts
