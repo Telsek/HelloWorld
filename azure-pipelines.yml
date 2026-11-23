@@ -1,8 +1,6 @@
-# HelloWorld CI - runs on a clean Microsoft-hosted VM on every push
+# HelloWorld pipeline - runs on every push, on a clean Microsoft VM
 trigger:
-  branches:
-    include:
-      - '*'
+  - '*'
 
 pool:
   vmImage: ubuntu-latest
@@ -10,36 +8,46 @@ pool:
 variables:
   major: 1
   minor: 0
-  # +1 on every run (Azure DevOps keeps the count)
+  # goes up by 1 on every run
   patch: $[counter(format('{0}.{1}', variables['major'], variables['minor']), 0)]
-  # the branch that gets the extra stages (SonarQube, NuGet, tag, email)
+  version: $(major).$(minor).$(patch)
+  # the extra stages only run on this branch
   tasksBranch: refs/heads/devops-tasks
 
 stages:
+  # ---- every branch ----
+
   - stage: Build
     jobs:
       - job: Build
         steps:
           - task: UseDotNet@2
-            displayName: Install .NET 10 SDK
             inputs:
-              packageType: sdk
               version: 10.0.x
 
-          # version = 1.0.<patch> -> printed + becomes the run's name
+          # print the version + use it as the run name
           - script: |
-              VERSION=$(major).$(minor).$(patch)
-              echo "Version: $VERSION"
-              echo "##vso[build.updatebuildnumber]$VERSION"
-              echo "##vso[task.setvariable variable=version]$VERSION"
+              echo "Version: $(version)"
+              echo "##vso[build.updatebuildnumber]$(version)"
             displayName: Version
 
-          - script: dotnet publish HelloWorld/HelloWorld.csproj -c Release -p:Version=$(version) -o $(Build.ArtifactStagingDirectory)/app
+          # if a test fails, the run stops here and nothing gets uploaded
+          - script: dotnet test HelloWorld.Tests --logger trx --results-directory $(Agent.TempDirectory)/tests
+            displayName: Test
+
+          # show the results in the run's Tests tab (also when a test failed)
+          - task: PublishTestResults@2
+            condition: succeededOrFailed()
+            inputs:
+              testResultsFormat: VSTest
+              searchFolder: $(Agent.TempDirectory)/tests
+              testResultsFiles: '*.trx'
+
+          - script: dotnet publish HelloWorld -c Release -p:Version=$(version) -o $(Build.ArtifactStagingDirectory)/app
             displayName: Build
 
-          # build output -> Azure Artifacts feed as a Universal package
+          # upload to the feed as a Universal package
           - task: UniversalPackages@0
-            displayName: Upload to Azure Artifacts
             inputs:
               command: publish
               publishDirectory: $(Build.ArtifactStagingDirectory)/app
@@ -47,82 +55,59 @@ stages:
               vstsFeedPackagePublish: helloworld
               versionOption: custom
               versionPublish: $(version)
-              packagePublishDescription: HelloWorld console app build
 
-  # ---- only on the devops-tasks branch ----
+  # ---- only on devops-tasks ----
 
   - stage: SonarQube
     dependsOn: Build
-    # runs only if Build passed AND this run is on devops-tasks (skipped everywhere else)
     condition: and(succeeded(), eq(variables['Build.SourceBranch'], variables['tasksBranch']))
     jobs:
       - job: Scan
         steps:
-          # full git history -> Sonar can show who changed what + compare with main
+          # full git history for Sonar
           - checkout: self
             fetchDepth: 0
 
           - task: UseDotNet@2
-            displayName: Install .NET 10 SDK
             inputs:
-              packageType: sdk
               version: 10.0.x
 
-          # 1. tell the scanner where to send results (service connection + keys)
-          # third-party tasks pinned to an exact version (Sonar: supply-chain risk with @4 = any 4.x)
-          #- task: SonarCloudPrepare@4
+          # pinned to an exact version (Sonar flagged @4 as a risk)
           - task: SonarCloudPrepare@4.4.0
-            displayName: Prepare SonarQube analysis
             inputs:
               SonarCloud: sonarcloud
               organization: telsek
               scannerMode: dotnet
               projectKey: Telsek_HelloWorld
-              projectName: HelloWorld
-              projectVersion: $(major).$(minor).$(patch)
 
-          # 2. build - the scanner watches the compile and collects the code
-          - script: dotnet build HelloWorld/HelloWorld.csproj -c Release
+          - script: dotnet build HelloWorld -c Release
             displayName: Build for analysis
 
-          # 3. analyze + upload to SonarQube Cloud
-          #- task: SonarCloudAnalyze@4
           - task: SonarCloudAnalyze@4.4.0
-            displayName: Run SonarQube analysis
             inputs:
               jdkversion: JAVA_HOME_21_X64
 
-          # 4. wait for the result -> quality gate shown on the run's summary
-          #- task: SonarCloudPublish@4
           - task: SonarCloudPublish@4.4.0
-            displayName: Publish quality gate result
-            inputs:
-              pollingTimeoutSec: '300'
 
   - stage: NuGet
-    # after the scan: code that fails the scan stage never gets packaged
     dependsOn: SonarQube
     condition: and(succeeded(), eq(variables['Build.SourceBranch'], variables['tasksBranch']))
     jobs:
       - job: Pack
         steps:
           - task: UseDotNet@2
-            displayName: Install .NET 10 SDK
             inputs:
-              packageType: sdk
               version: 10.0.x
 
-          # DLL -> HelloWorld.1.0.<patch>.nupkg
-          - script: dotnet pack HelloWorld/HelloWorld.csproj -c Release -p:PackageVersion=$(major).$(minor).$(patch) -o $(Build.ArtifactStagingDirectory)/nuget
-            displayName: Pack NuGet package
+          - script: dotnet pack HelloWorld -c Release -p:PackageVersion=$(version) -o $(Build.ArtifactStagingDirectory)/nuget
+            displayName: Pack
 
-          # temporary feed login for dotnet (pipeline identity = HelloWorld Build Service, Feed Publisher)
+          # logs dotnet in to the feed
           - task: NuGetAuthenticate@1
-            displayName: Authenticate to Azure Artifacts
 
-          # push with the NuGet protocol to the feed (--api-key is a required placeholder, login comes from NuGetAuthenticate)
+          # --api-key is required but not used, the login comes from NuGetAuthenticate
           - script: dotnet nuget push $(Build.ArtifactStagingDirectory)/nuget/*.nupkg --source https://pkgs.dev.azure.com/andrei-amzulescu/HelloWorld/_packaging/helloworld-feed/nuget/v3/index.json --api-key az
-            displayName: Push NuGet package to Azure Artifacts
+            displayName: Push
 
   - stage: Tag
     dependsOn: NuGet
@@ -130,69 +115,57 @@ stages:
     jobs:
       - job: Tag
         steps:
-          # name = <branch>_<version> -> printed + added as a tag on this run
+          # name = devops-tasks_<version>, printed + added as a tag
           - script: |
-              VERSION=$(major).$(minor).$(patch)
-              NAME=$(Build.SourceBranchName)_$VERSION
-              echo "Version: $VERSION"
+              NAME=$(Build.SourceBranchName)_$(version)
+              echo "Version: $(version)"
               echo "Artifact name: $NAME"
               echo "##vso[build.addbuildtag]$NAME"
               echo "##vso[task.setvariable variable=artifactName]$NAME"
             displayName: Name + tag
 
           - task: UseDotNet@2
-            displayName: Install .NET 10 SDK
             inputs:
-              packageType: sdk
               version: 10.0.x
 
-          - script: dotnet publish HelloWorld/HelloWorld.csproj -c Release -p:Version=$(major).$(minor).$(patch) -o $(Build.ArtifactStagingDirectory)/app
+          - script: dotnet publish HelloWorld -c Release -p:Version=$(version) -o $(Build.ArtifactStagingDirectory)/app
             displayName: Build
 
-          # build output attached to this run as artifact <branch>_<version>
+          # the build, saved on the run with that name
           - task: PublishPipelineArtifact@1
-            displayName: Publish artifact
             inputs:
               targetPath: $(Build.ArtifactStagingDirectory)/app
               artifact: $(artifactName)
 
-  # ---- email: exactly one of these two runs (devops-tasks only) ----
+  # ---- email: one of these two runs ----
 
   - stage: EmailSuccess
-    # all 4 stages passed
     dependsOn: [Build, SonarQube, NuGet, Tag]
     condition: and(succeeded(), eq(variables['Build.SourceBranch'], variables['tasksBranch']))
     variables:
-      # Library -> variable group "email": SMTP_USER, MAIL_TO, SMTP_PASS (secret)
+      # SMTP_USER, MAIL_TO, SMTP_PASS (secret) from Library
       - group: email
     jobs:
       - job: Mail
         steps:
           - checkout: none
-
-          # write the mail (headers, empty line, body) -> send it through Gmail SMTP with curl
           - script: |
               cat > mail.txt <<EOF
               From: HelloWorld Pipeline <$SMTP_USER>
               To: $MAIL_TO
-              Subject: SUCCESS: HelloWorld $(Build.BuildNumber) on $(Build.SourceBranchName)
+              Subject: SUCCESS: HelloWorld $(version) on $(Build.SourceBranchName)
 
-              Pipeline run $(Build.BuildNumber) succeeded.
-              Branch: $(Build.SourceBranchName)
-              Commit: $(Build.SourceVersion)
-              Run: $(System.CollectionUri)$(System.TeamProject)/_build/results?buildId=$(Build.BuildId)
+              Run $(version) succeeded.
+              $(System.CollectionUri)$(System.TeamProject)/_build/results?buildId=$(Build.BuildId)
               EOF
-              curl --ssl-reqd --url smtps://smtp.gmail.com:465 \
-                --user "$SMTP_USER:$SMTP_PASS" \
-                --mail-from "$SMTP_USER" --mail-rcpt "$MAIL_TO" \
-                --upload-file mail.txt
-            displayName: Send success email
-            # secrets are not passed to scripts automatically -> hand it over (masked *** in the log)
+              curl --ssl-reqd --url smtps://smtp.gmail.com:465 --user "$SMTP_USER:$SMTP_PASS" \
+                --mail-from "$SMTP_USER" --mail-rcpt "$MAIL_TO" --upload-file mail.txt
+            displayName: Send email
+            # secrets have to be passed in by hand
             env:
               SMTP_PASS: $(SMTP_PASS)
 
   - stage: EmailFailure
-    # at least one of the 4 stages failed
     dependsOn: [Build, SonarQube, NuGet, Tag]
     condition: and(failed(), eq(variables['Build.SourceBranch'], variables['tasksBranch']))
     variables:
@@ -201,22 +174,17 @@ stages:
       - job: Mail
         steps:
           - checkout: none
-
           - script: |
               cat > mail.txt <<EOF
               From: HelloWorld Pipeline <$SMTP_USER>
               To: $MAIL_TO
-              Subject: FAILED: HelloWorld $(Build.BuildNumber) on $(Build.SourceBranchName)
+              Subject: FAILED: HelloWorld $(version) on $(Build.SourceBranchName)
 
-              Pipeline run $(Build.BuildNumber) failed.
-              Branch: $(Build.SourceBranchName)
-              Commit: $(Build.SourceVersion)
-              Run: $(System.CollectionUri)$(System.TeamProject)/_build/results?buildId=$(Build.BuildId)
+              Run $(version) failed.
+              $(System.CollectionUri)$(System.TeamProject)/_build/results?buildId=$(Build.BuildId)
               EOF
-              curl --ssl-reqd --url smtps://smtp.gmail.com:465 \
-                --user "$SMTP_USER:$SMTP_PASS" \
-                --mail-from "$SMTP_USER" --mail-rcpt "$MAIL_TO" \
-                --upload-file mail.txt
-            displayName: Send failure email
+              curl --ssl-reqd --url smtps://smtp.gmail.com:465 --user "$SMTP_USER:$SMTP_PASS" \
+                --mail-from "$SMTP_USER" --mail-rcpt "$MAIL_TO" --upload-file mail.txt
+            displayName: Send email
             env:
               SMTP_PASS: $(SMTP_PASS)
