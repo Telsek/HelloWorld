@@ -1,3 +1,5 @@
+using HelloWorld;
+
 // checks the app prints the right text - if someone changes it, the pipeline fails here
 public class GreetingTests
 {

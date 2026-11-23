@@ -116,13 +116,16 @@ stages:
       - job: Tag
         steps:
           # name = devops-tasks_<version>, printed + added as a tag
+          # branch name comes in through env (Sonar: never put it straight in a script)
           - script: |
-              NAME=$(Build.SourceBranchName)_$(version)
+              NAME="${BRANCH}_$(version)"
               echo "Version: $(version)"
               echo "Artifact name: $NAME"
               echo "##vso[build.addbuildtag]$NAME"
               echo "##vso[task.setvariable variable=artifactName]$NAME"
             displayName: Name + tag
+            env:
+              BRANCH: $(Build.SourceBranchName)
 
           - task: UseDotNet@2
             inputs:
@@ -153,7 +156,7 @@ stages:
               cat > mail.txt <<EOF
               From: HelloWorld Pipeline <$SMTP_USER>
               To: $MAIL_TO
-              Subject: SUCCESS: HelloWorld $(version) on $(Build.SourceBranchName)
+              Subject: SUCCESS: HelloWorld $(version) on $BRANCH
 
               Run $(version) succeeded.
               $(System.CollectionUri)$(System.TeamProject)/_build/results?buildId=$(Build.BuildId)
@@ -161,9 +164,10 @@ stages:
               curl --ssl-reqd --url smtps://smtp.gmail.com:465 --user "$SMTP_USER:$SMTP_PASS" \
                 --mail-from "$SMTP_USER" --mail-rcpt "$MAIL_TO" --upload-file mail.txt
             displayName: Send email
-            # secrets have to be passed in by hand
+            # secrets have to be passed in by hand, the branch name too (Sonar)
             env:
               SMTP_PASS: $(SMTP_PASS)
+              BRANCH: $(Build.SourceBranchName)
 
   - stage: EmailFailure
     dependsOn: [Build, SonarQube, NuGet, Tag]
@@ -178,7 +182,7 @@ stages:
               cat > mail.txt <<EOF
               From: HelloWorld Pipeline <$SMTP_USER>
               To: $MAIL_TO
-              Subject: FAILED: HelloWorld $(version) on $(Build.SourceBranchName)
+              Subject: FAILED: HelloWorld $(version) on $BRANCH
 
               Run $(version) failed.
               $(System.CollectionUri)$(System.TeamProject)/_build/results?buildId=$(Build.BuildId)
@@ -188,3 +192,4 @@ stages:
             displayName: Send email
             env:
               SMTP_PASS: $(SMTP_PASS)
+              BRANCH: $(Build.SourceBranchName)
