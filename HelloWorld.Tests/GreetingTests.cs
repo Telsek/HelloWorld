@@ -1,5 +1,7 @@
 using HelloWorld;
 
+namespace HelloWorld.Tests;
+
 // checks the app prints the right text - if someone changes it, the pipeline fails here
 public class GreetingTests
 {
