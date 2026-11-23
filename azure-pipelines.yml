@@ -55,6 +55,7 @@ stages:
               vstsFeedPackagePublish: helloworld
               versionOption: custom
               versionPublish: $(version)
+              packagePublishDescription: HelloWorld console app build
 
   # ---- only on devops-tasks ----
 
@@ -121,7 +122,7 @@ stages:
     jobs:
       - job: Tag
         steps:
-          # name = devops-tasks_<version>, printed + added as a tag
+          # name = devops-tasks_<version>, printed + added as a tag on the run
           # branch name comes in through env (Sonar: never put it straight in a script)
           - script: |
               NAME="${BRANCH}_$(version)"
@@ -140,11 +141,20 @@ stages:
           - script: dotnet publish HelloWorld -c Release -p:Version=$(version) -o $(Build.ArtifactStagingDirectory)/app
             displayName: Build
 
-          # the build, saved on the run with that name
-          - task: PublishPipelineArtifact@1
+          # upload to Azure Artifacts as a package named devops-tasks_<version>
+          #- task: PublishPipelineArtifact@1
+          #  inputs:
+          #    targetPath: $(Build.ArtifactStagingDirectory)/app
+          #    artifact: $(artifactName)
+          - task: UniversalPackages@0
             inputs:
-              targetPath: $(Build.ArtifactStagingDirectory)/app
-              artifact: $(artifactName)
+              command: publish
+              publishDirectory: $(Build.ArtifactStagingDirectory)/app
+              vstsFeedPublish: HelloWorld/helloworld-feed
+              vstsFeedPackagePublish: $(artifactName)
+              versionOption: custom
+              versionPublish: $(version)
+              packagePublishDescription: HelloWorld build from the devops-tasks branch
 
   # ---- email: one of these two runs ----
 
