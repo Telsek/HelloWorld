@@ -18,7 +18,7 @@ On the `devops-tasks` branch it also:
 
 - runs a SonarQube scan
 - makes a NuGet package and uploads it to Azure Artifacts
-- tags the run as `devops-tasks_<version>`
+- tags the run and uploads the build to Azure Artifacts as `devops-tasks_<version>`
 - sends an email if the run passed or failed
 
 On other branches these steps are skipped. The pipeline is in `azure-pipelines.yml`.
