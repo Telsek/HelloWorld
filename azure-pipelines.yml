@@ -79,9 +79,13 @@ stages:
               organization: telsek
               scannerMode: dotnet
               projectKey: Telsek_HelloWorld
+              # where to find the test coverage file
+              extraProperties: |
+                sonar.cs.opencover.reportsPaths=$(Agent.TempDirectory)/coverage/**/coverage.opencover.xml
 
-          - script: dotnet build HelloWorld -c Release
-            displayName: Build for analysis
+          # build + run the test with coverage, Sonar reads the coverage file
+          - script: dotnet test HelloWorld.Tests -c Release --collect "XPlat Code Coverage" --results-directory $(Agent.TempDirectory)/coverage -- DataCollectionRunSettings.DataCollectors.DataCollector.Configuration.Format=opencover
+            displayName: Test with coverage
 
           - task: SonarCloudAnalyze@4.4.0
             inputs:
